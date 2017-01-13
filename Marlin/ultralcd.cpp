@@ -48,6 +48,10 @@
   #define ENCODER_DIRECTION_MENUS() ;
 #endif
 
+#if ENABLED( AUTO_BED_LEVELING_FEATURE )
+  #define Z_OFFSET_REINIT_START_VALUE (-4.0f)
+#endif
+
 int8_t encoderDiff; // updated from interrupt context and added to encoderPosition every LCD update
 
 bool encoderRateMultiplierEnabled;
@@ -96,6 +100,10 @@ static void lcd_status_screen();
   static void lcd_control_temperature_preheat_abs_settings_menu();
   static void lcd_control_motion_menu();
   static void lcd_control_volumetric_menu();
+  #if ENABLED(AUTO_BED_LEVELING_FEATURE)
+    static void lcd_set_z_offsets();
+  #endif
+  static void lcd_prepare_advanced_menu();
 
   #if ENABLED(HAS_LCD_CONTRAST)
     static void lcd_set_contrast();
@@ -691,6 +699,7 @@ static void lcd_tune_menu() {
   //
   // Fan Speed:
   //
+
   #if FAN_COUNT > 0
     #if HAS_FAN0
       #if FAN_COUNT > 1
@@ -871,6 +880,33 @@ void lcd_cooldown() {
   #endif
   disable_all_heaters();
   lcd_return_to_status();
+}
+
+void lcd_parallel_x(){
+  lcd_return_to_status();
+
+  enqueue_and_echo_commands_P( PSTR("M117 Origine Machine") );  // ; Message sur afficheur
+  enqueue_and_echo_commands_P( PSTR("M84") );  //                  ; Disable motors to encure Z_SAFE_HOMING
+  enqueue_and_echo_commands_P( PSTR("G28") );  //             	   ; Home X Y Z
+  enqueue_and_echo_commands_P( PSTR("G90") );  //                	 ; Passage coordonnees absolues
+  wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+  //;Parallelisme Axe X
+  enqueue_and_echo_commands_P( PSTR("M117 Parallelisme X") );  //      ; Message sur afficheur
+  enqueue_and_echo_commands_P( PSTR("G1 Z5 F9000") );  //           ; lift nozzle
+  wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+  enqueue_and_echo_commands_P( PSTR("G1 X-24 Y-14 F9000") );  //
+  enqueue_and_echo_commands_P( PSTR("G92 Z20") );  //
+  enqueue_and_echo_commands_P( PSTR("G91") );  //                   ; Passage coordonnees relatives
+  wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+  enqueue_and_echo_commands_P( PSTR("G1 Z-15 F200") );  //		     ; Descente en dessous du plateau
+  enqueue_and_echo_commands_P( PSTR("G1 Z15 F9000") );  //
+  enqueue_and_echo_commands_P( PSTR("G28") );  //		            ; Home
+  wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+  enqueue_and_echo_commands_P( PSTR("G90") );  //                   ; Passage coordonnees absolues
 }
 
 #if ENABLED(SDSUPPORT) && ENABLED(MENU_ADDAUTOSTART)
@@ -1079,6 +1115,10 @@ void lcd_cooldown() {
     END_MENU();
   }
 
+  /**
+   * Step 1: MBL entry-point: "Cancel" or "Level Bed"
+   */
+
 #endif  // MANUAL_BED_LEVELING
 
 /**
@@ -1086,6 +1126,15 @@ void lcd_cooldown() {
  * "Prepare" submenu
  *
  */
+
+ //Préparer
+   // Déplacer un axes
+   // Préchanffage PLA
+   // Réglage Offset
+   // Refroidir
+   // Eteindre alim.
+   // Tout le reste : Réglages avancés
+     // Préchauffage ABS
 
 static void lcd_prepare_menu() {
   START_MENU();
@@ -1095,37 +1144,11 @@ static void lcd_prepare_menu() {
   //
   MENU_ITEM(back, MSG_MAIN);
 
-  //
-  // Auto Home
-  //
-  MENU_ITEM(gcode, MSG_AUTO_HOME, PSTR("G28"));
-
-  //
-  // Set Home Offsets
-  //
-  MENU_ITEM(function, MSG_SET_HOME_OFFSETS, lcd_set_home_offsets);
-  //MENU_ITEM(gcode, MSG_SET_ORIGIN, PSTR("G92 X0 Y0 Z0"));
-
-  //
-  // Level Bed
-  //
-  #if ENABLED(AUTO_BED_LEVELING_FEATURE)
-    MENU_ITEM(gcode, MSG_LEVEL_BED,
-      axis_homed[X_AXIS] && axis_homed[Y_AXIS] ? PSTR("G29") : PSTR("G28\nG29")
-    );
-  #elif ENABLED(MANUAL_BED_LEVELING)
-    MENU_ITEM(submenu, MSG_LEVEL_BED, lcd_level_bed);
-  #endif
 
   //
   // Move Axis
   //
   MENU_ITEM(submenu, MSG_MOVE_AXIS, lcd_move_menu);
-
-  //
-  // Disable Steppers
-  //
-  MENU_ITEM(gcode, MSG_DISABLE_STEPPERS, PSTR("M84"));
 
   //
   // Preheat PLA
@@ -1134,12 +1157,22 @@ static void lcd_prepare_menu() {
   #if TEMP_SENSOR_0 != 0
     #if TEMP_SENSOR_1 != 0 || TEMP_SENSOR_2 != 0 || TEMP_SENSOR_3 != 0 || TEMP_SENSOR_BED != 0
       MENU_ITEM(submenu, MSG_PREHEAT_PLA, lcd_preheat_pla_menu);
-      MENU_ITEM(submenu, MSG_PREHEAT_ABS, lcd_preheat_abs_menu);
     #else
       MENU_ITEM(function, MSG_PREHEAT_PLA, lcd_preheat_pla0);
-      MENU_ITEM(function, MSG_PREHEAT_ABS, lcd_preheat_abs0);
     #endif
   #endif
+
+  #if ENABLED(PARALLEL_X_FEATURE)
+    MENU_ITEM(function, MSG_PARALLEL_X, lcd_parallel_x);
+  #endif
+
+  //
+  // Level Bed
+  //
+  #if ENABLED(AUTO_BED_LEVELING_FEATURE)
+    MENU_ITEM(submenu, MSG_Z_OFFSET, lcd_set_z_offsets);
+  #endif
+
 
   //
   // Cooldown
@@ -1155,6 +1188,57 @@ static void lcd_prepare_menu() {
     else
       MENU_ITEM(gcode, MSG_SWITCH_PS_ON, PSTR("M80"));
   #endif
+
+  MENU_ITEM(submenu, MSG_PREPARE_ADVENCED, lcd_prepare_advanced_menu);
+
+  END_MENU();
+}
+
+static void lcd_prepare_advanced_menu() {
+  START_MENU();
+
+  //
+  // ^ Main
+  //
+  MENU_ITEM(back, MSG_MAIN);
+  //
+  // Auto Home
+  //
+  MENU_ITEM(gcode, MSG_AUTO_HOME, PSTR("G28"));
+
+  //
+  // Level Bed
+  //
+  #if ENABLED(AUTO_BED_LEVELING_FEATURE)
+    MENU_ITEM(gcode, MSG_LEVEL_BED,
+      axis_homed[X_AXIS] && axis_homed[Y_AXIS] ? PSTR("G29") : PSTR("G28\nG29")
+    );
+  #elif ENABLED(MANUAL_BED_LEVELING)
+    MENU_ITEM(submenu, MSG_LEVEL_BED, lcd_level_bed);
+  #endif
+
+  //
+  // Preheat PLA
+  // Preheat ABS
+  //
+  #if TEMP_SENSOR_0 != 0
+    #if TEMP_SENSOR_1 != 0 || TEMP_SENSOR_2 != 0 || TEMP_SENSOR_3 != 0 || TEMP_SENSOR_BED != 0
+      MENU_ITEM(submenu, MSG_PREHEAT_ABS, lcd_preheat_abs_menu);
+    #else
+      MENU_ITEM(function, MSG_PREHEAT_ABS, lcd_preheat_abs0);
+    #endif
+  #endif
+
+  //
+  // Set Home Offsets
+  //
+  MENU_ITEM(function, MSG_SET_HOME_OFFSETS, lcd_set_home_offsets);
+  //MENU_ITEM(gcode, MSG_SET_ORIGIN, PSTR("G92 X0 Y0 Z0"));
+
+  //
+  // Disable Steppers
+  //
+  MENU_ITEM(gcode, MSG_DISABLE_STEPPERS, PSTR("M84"));
 
   //
   // Autostart
@@ -1203,6 +1287,40 @@ static void _lcd_move(const char* name, AxisEnum axis, float min, float max) {
   if (lcdDrawUpdate) lcd_implementation_drawedit(name, ftostr31(current_position[axis]));
   if (LCD_CLICKED) lcd_goto_previous_menu(true);
 }
+
+static void _lcd_move_callback(const char* name, AxisEnum axis, float min, float max, menuFunc_t callback) {
+  ENCODER_DIRECTION_NORMAL();
+  if (encoderPosition && movesplanned() <= 3) {
+    refresh_cmd_timeout();
+    current_position[axis] += float((int32_t)encoderPosition) * move_menu_scale;
+    if (min_software_endstops) NOLESS(current_position[axis], min);
+    if (max_software_endstops) NOMORE(current_position[axis], max);
+    line_to_current(axis);
+    lcdDrawUpdate = LCDVIEW_REDRAW_NOW;
+  }
+  encoderPosition = 0;
+  if (lcdDrawUpdate) lcd_implementation_drawedit(name, ftostr31(current_position[axis]));
+  if (LCD_CLICKED) (*callback)();
+}
+
+#if ENABLED( AUTO_BED_LEVELING_FEATURE )
+  static void _lcd_move_callback_with_offset(const char* name, AxisEnum axis, float min, float max, menuFunc_t callback, float offset) {
+    ENCODER_DIRECTION_NORMAL();
+    if (encoderPosition && movesplanned() <= 3) {
+      refresh_cmd_timeout();
+      current_position[axis] += float((int32_t)encoderPosition) * move_menu_scale;
+      if (min_software_endstops) NOLESS(current_position[axis], min);
+      if (max_software_endstops) NOMORE(current_position[axis], max);
+      line_to_current(axis);
+      lcdDrawUpdate = LCDVIEW_REDRAW_NOW;
+    }
+    encoderPosition = 0;
+    if (lcdDrawUpdate) lcd_implementation_drawedit(name, ftostr32(current_position[axis] + offset));
+    if (LCD_CLICKED) (*callback)();
+  }
+#endif
+
+
 #if ENABLED(DELTA)
   static float delta_clip_radius_2 =  (DELTA_PRINTABLE_RADIUS) * (DELTA_PRINTABLE_RADIUS);
   static int delta_clip( float a ) { return sqrt(delta_clip_radius_2 - a*a); }
@@ -1212,7 +1330,7 @@ static void _lcd_move(const char* name, AxisEnum axis, float min, float max) {
   static void lcd_move_x() { _lcd_move(PSTR(MSG_MOVE_X), X_AXIS, sw_endstop_min[X_AXIS], sw_endstop_max[X_AXIS]); }
   static void lcd_move_y() { _lcd_move(PSTR(MSG_MOVE_Y), Y_AXIS, sw_endstop_min[Y_AXIS], sw_endstop_max[Y_AXIS]); }
 #endif
-static void lcd_move_z() { _lcd_move(PSTR(MSG_MOVE_Z), Z_AXIS, sw_endstop_min[Z_AXIS], sw_endstop_max[Z_AXIS]); }
+static void lcd_move_z() { _lcd_move(PSTR(MSG_MOVE_Z), Z_AXIS, sw_endstop_min[Z_AXIS], sw_endstop_max[Z_AXIS]); SERIAL_ERRORLN("lcdZConf"); }
 static void lcd_move_e(
   #if EXTRUDERS > 1
     uint8_t e
@@ -1314,6 +1432,124 @@ static void lcd_move_menu_01mm() {
   move_menu_scale = 0.1;
   _lcd_move_menu_axis();
 }
+
+#if ENABLED( AUTO_BED_LEVELING_FEATURE )
+
+static void _lcd_reinit_z_offsets_saved(){
+  START_MENU();
+
+  MENU_ITEM_DUMMY();
+  MENU_ITEM_DUMMY();
+  MENU_ITEM_DUMMY();
+  MENU_ITEM_DUMMY();
+
+  lcd_implementation_drawmenu_generic(0, 1, PSTR(MSG_PARAMETERS), ' ', ' ');
+  lcd_implementation_drawmenu_generic(0, 2, PSTR(MSG_SAVED), ' ', ' ');
+
+  encoderLine = 4;
+  MENU_ITEM(submenu, MSG_LCD_OK, lcd_return_to_status);
+
+
+  END_MENU();
+}
+
+static void _lcd_reinit_z_offsets_wait(){
+  START_MENU();
+
+  lcd_implementation_drawmenu_generic(0, 2, PSTR(MSG_WAIT), ' ', ' ');
+
+  END_MENU();
+}
+
+static void _lcd_reinit_z_offsets_save_back(){
+  lcd_goto_menu(_lcd_reinit_z_offsets_wait);
+
+  zprobe_zoffset = Z_OFFSET_REINIT_START_VALUE + current_position[Z_AXIS];
+
+  Config_StoreSettings();
+  enqueue_and_echo_commands_P(PSTR("M84"));   // ; Disable motors to encure Z_SAFE_HOMING
+  enqueue_and_echo_commands_P(PSTR("G28"));   // origine auto : besoin pour que le z soit pris en compte
+  enqueue_and_echo_commands_P(PSTR("G0 Z0")); // 
+
+  wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+  defer_return_to_status = false;
+  lcd_goto_menu(_lcd_reinit_z_offsets_saved);
+}
+
+static void _lcd_reinit_z_offsets_zConfig(){
+
+  lcd_implementation_drawmenu_generic(0, 0, PSTR(MSG_PINCH), ' ', ' ');
+  lcd_implementation_drawmenu_generic(0, 1, PSTR(MSG_SET_OFFSET), ' ', ' ');
+
+  //lcd_move_z();
+  move_menu_scale = 0.05;
+  _lcd_move_callback_with_offset(PSTR(MSG_MOVE_Z), Z_AXIS, sw_endstop_min[Z_AXIS], sw_endstop_max[Z_AXIS], _lcd_reinit_z_offsets_save_back, Z_OFFSET_REINIT_START_VALUE);
+
+  lcd_implementation_drawmenu_generic(0, 4, PSTR(MSG_VALIDATE), ' ', ' ');
+}
+
+
+static void _lcd_reinit_z_offsets_screenSheet(){
+  START_MENU();
+
+  MENU_ITEM_DUMMY();
+  MENU_ITEM_DUMMY();
+  MENU_ITEM_DUMMY();
+  MENU_ITEM_DUMMY();
+
+  lcd_implementation_drawmenu_generic(0, 0, PSTR(MSG_ADD_SHEET), ' ', ' ');
+  lcd_implementation_drawmenu_generic(0, 1, PSTR(MSG_BESIDE_NOZZLE), ' ', ' ');
+  lcd_implementation_drawmenu_generic(0, 2, PSTR(MSG_CLICK_OK), ' ', ' ');
+  //_drawLineNr = 3;
+  encoderLine = 4;
+  MENU_ITEM(submenu, "OK", _lcd_reinit_z_offsets_zConfig);
+
+  END_MENU();
+}
+
+//1 écran : Placez la feuille et validez
+//2 écran : Pincez la feuille
+
+//si décalage : vérifier BED_CENTER_AT_0_0 n'est pas define dans la conf
+
+static void lcd_reinit_z_offsets(){
+  lcd_goto_menu(_lcd_reinit_z_offsets_wait);
+
+  defer_return_to_status = true;
+
+  zprobe_zoffset = Z_OFFSET_REINIT_START_VALUE;
+  Config_StoreSettings();
+  enqueue_and_echo_commands_P(PSTR("M84"));  // ; Disable motors to encure Z_SAFE_HOMING
+  enqueue_and_echo_commands_P(PSTR("G28"));  // origine auto
+  wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+  lcd_goto_menu(_lcd_reinit_z_offsets_screenSheet);
+}
+
+static void lcd_set_z_offsets_save_config() {
+  Config_StoreSettings();
+  enqueue_and_echo_commands_P(PSTR("M84"));   // ; Disable motors to encure Z_SAFE_HOMING
+  enqueue_and_echo_commands_P(PSTR("G28"));
+  enqueue_and_echo_commands_P(PSTR("G0 Z0")); // origine auto : besoin pour que le z soit pris en compte
+}
+
+static void lcd_set_z_offsets() {
+  START_MENU();
+  MENU_ITEM(back, MSG_PREPARE);
+  
+  MENU_ITEM(function, "Reinitialiser", lcd_reinit_z_offsets);
+  //zprobe_zoffset = -4.0;
+  //Config_StoreSettings();
+  //enqueue_and_echo_commands_P(PSTR("G28")); //origine auto
+  //lcd_move_z();
+
+  MENU_ITEM_EDIT_CALLBACK(float32, MSG_ZPROBE_ZOFFSET, &zprobe_zoffset, Z_PROBE_OFFSET_RANGE_MIN, Z_PROBE_OFFSET_RANGE_MAX, lcd_set_z_offsets_save_config);
+
+  END_MENU();
+}
+
+#endif
 
 /**
  *
@@ -1490,7 +1726,7 @@ static void lcd_control_temperature_menu() {
   //
   // Fan Speed:
   //
-  #if FAN_COUNT > 0
+  #if (FAN_COUNT > 0) && (DISABLED (IS_MONO_FAN))
     #if HAS_FAN0
       #if FAN_COUNT > 1
         #define MSG_1ST_FAN_SPEED MSG_FAN_SPEED " 1"

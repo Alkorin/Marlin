@@ -81,6 +81,10 @@
   #include "twibus.h"
 #endif
 
+#if ENABLED(USE_SECOND_SERIAL)
+  #include "HardwareSerial.h"
+#endif
+
 /**
  * Look here for descriptions of G-codes:
  *  - http://linuxcnc.org/handbook/gcode/g-code.html
@@ -231,6 +235,17 @@
  * M365 - SCARA calibration: Scaling factor, X, Y, Z axis
  * ************* SCARA End ***************
  *
+ * ************ DAGOMA.FR Specific - This can change to suit future G-code regulations
+ * M700 - Wifi : Set SSID to use.
+ * M701 - Wifi : Set Password to use and connect !
+ * M702 - Wifi : Get current local IP Address if wifi is ready, 0 otherwize.
+ * M710 - Wifi : Set printer technical name.
+ * M711 - Wifi : Set API Url to use.
+ * M712 - Wifi : Set API Key to use.
+ * M720 - Wifi : Echo the string in serial .
+
+ * ************ DAGOMA.FR End ***************
+ *
  * ************ Custom codes - This can change to suit future G-code regulations
  * M100 - Watch Free Memory (For Debugging Only)
  * M851 - Set Z probe's Z offset (mm above extruder -- The value will always be negative)
@@ -243,6 +258,7 @@
  *
  * T0-T3 - Select a tool by index (usually an extruder) [ F<mm/min> ]
  *
+
  */
 
 #if ENABLED(M100_FREE_MEMORY_WATCHER)
@@ -325,6 +341,10 @@ const int sensitive_pins[] = SENSITIVE_PINS; ///< Sensitive pin list for M42
 millis_t previous_cmd_ms = 0;
 static millis_t max_inactive_time = 0;
 static millis_t stepper_inactive_time = (DEFAULT_STEPPER_DEACTIVE_TIME) * 1000UL;
+
+#if ENABLED(IS_MONO_FAN) || ENABLED(PRINTER_HEAD_EASY)
+static millis_t next_fan_auto_regulation_check = 0;
+#endif
 
 // Print Job Timer
 Stopwatch print_job_timer = Stopwatch();
@@ -447,6 +467,14 @@ static uint8_t target_extruder;
 
 #if ENABLED(FILAMENT_RUNOUT_SENSOR)
   static bool filament_ran_out = false;
+#endif
+#if ENABLED(SUMMON_PRINT_PAUSE)
+  static bool print_pause_summoned = false;
+#endif
+#if ENABLED(U8GLIB_SSD1306) && ENABLED(INTELLIGENT_LCD_REFRESH_RATE)
+  static float last_intelligent_z_lcd_update = 0;
+  static float last_intelligent_F_lcd_update = 0;
+  static bool last_intelligent_F_authorized_lcd_update = false;
 #endif
 
 static bool send_ok[BUFSIZE];
@@ -583,6 +611,29 @@ static bool drain_queued_commands_P() {
     }
   }
   return (queued_commands_P != NULL);      // return whether any more remain
+}
+
+/**
+ * Test for all enqueued commands to be processed.
+ * return false if it remains command, true when all commands are done
+ */
+bool enqueued_commands_finished__CALLABLE_FROM_LCD_ONLY() {
+  if ( commands_in_queue > 0) {
+    process_next_command();
+    cmd_queue_index_r = (cmd_queue_index_r + 1) % BUFSIZE;
+    commands_in_queue--;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Wait for all enqueued commands to be processed.
+ */
+void wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY() {
+  while (!enqueued_commands_finished__CALLABLE_FROM_LCD_ONLY()) {
+    idle();
+  }
 }
 
 /**
@@ -855,7 +906,71 @@ void setup() {
     pinMode(STAT_LED_BLUE, OUTPUT);
     digitalWrite(STAT_LED_BLUE, LOW); // turn it off
   #endif
+
+  #if ENABLED(USE_SECOND_SERIAL)
+    SECOND_SERIAL.begin( SECOND_SERIAL_BAUDRATE );
+  #endif
+
+  #if ENABLED(SUMMON_PRINT_PAUSE) && SUMMON_PRINT_PAUSE_PIN != X_MIN_PIN && SUMMON_PRINT_PAUSE_PIN != Y_MAX_PIN && SUMMON_PRINT_PAUSE_PIN != Z_MIN_PIN
+    SET_INPUT(SUMMON_PRINT_PAUSE_PIN);
+    WRITE(SUMMON_PRINT_PAUSE_PIN, HIGH);
+  #endif
+
+  #if ENABLED(PRINTER_HEAD_EASY)
+    SET_OUTPUT(PRINTER_HEAD_EASY_CONSTANT_FAN_PIN);
+    WRITE(PRINTER_HEAD_EASY_CONSTANT_FAN_PIN, LOW);
+  #endif
 }
+
+#if ENABLED(WIFI_PRINT)
+  unsigned long last_status_timestamp = 0;
+  void manage_second_serial_status() {
+    if ( millis() - last_status_timestamp > 10000 ) {
+      SECOND_SERIAL.print( "STAT:" );
+
+      SECOND_SERIAL.print( "tstp:" );
+      SECOND_SERIAL.print(  millis()  );
+
+      SECOND_SERIAL.print( " X:" );
+      SECOND_SERIAL.print( current_position[X_AXIS] );
+      SECOND_SERIAL.print( " Y:" );
+      SECOND_SERIAL.print( current_position[Y_AXIS] );
+      SECOND_SERIAL.print( " Z:" );
+      SECOND_SERIAL.print( current_position[Z_AXIS] );
+      SECOND_SERIAL.print( " E:" );
+      SECOND_SERIAL.print( current_position[E_AXIS] );
+
+      #if HAS_TEMP_HOTEND
+        SECOND_SERIAL.print( " TC:" );
+        SECOND_SERIAL.print( degHotend(target_extruder), 1 );
+        SECOND_SERIAL.print( " TT:" );
+        SECOND_SERIAL.print( degTargetHotend(target_extruder), 1 );
+      #endif
+      #if HAS_TEMP_BED
+        SECOND_SERIAL.print( " BC:" );
+        SECOND_SERIAL.print( degBed(), 1 );
+        SECOND_SERIAL.print( " BT:" );
+        SECOND_SERIAL.print( degTargetBed(), 1 );
+      #endif
+
+      #if ENABLED(SDSUPPORT)
+        SECOND_SERIAL.print( " SD_OK:" );
+        SECOND_SERIAL.print( card.cardOK );
+
+        SECOND_SERIAL.print( " SD_PRINTING:" );
+        SECOND_SERIAL.print( card.sdprinting );
+
+        SECOND_SERIAL.print( " SD_PROGRESS:" );
+        SECOND_SERIAL.print( card.percentDone() );
+      #endif
+
+      SECOND_SERIAL.println();
+
+      last_status_timestamp = millis();
+    }
+  }
+
+#endif // END WIFI_PRINT
 
 /**
  * The main Marlin program loop
@@ -868,6 +983,11 @@ void setup() {
  *  - Call LCD update
  */
 void loop() {
+
+  #if ENABLED( WIFI_PRINT )
+    manage_second_serial_status();
+  #endif
+
   if (commands_in_queue < BUFSIZE) get_available_commands();
 
   #if ENABLED(SDSUPPORT)
@@ -938,9 +1058,25 @@ inline void get_serial_commands() {
   /**
    * Loop while serial characters are incoming and the queue is not full
    */
+  #if ENABLED( WIFI_PRINT )
+
+    while (commands_in_queue < BUFSIZE && (MYSERIAL.available() > 0 || SECOND_SERIAL.available() > 0 )) {
+
+    char serial_char;
+    if ( SECOND_SERIAL.available() > 0 ) {
+      serial_char = SECOND_SERIAL.read();
+    }
+    else {
+      serial_char = MYSERIAL.read();
+    }
+
+  #else // ELSE WIFI_PRINT
+
   while (commands_in_queue < BUFSIZE && MYSERIAL.available() > 0) {
 
     char serial_char = MYSERIAL.read();
+
+  #endif // END WIFI_PRINT
 
     /**
      * If the character ends the line
@@ -960,6 +1096,14 @@ inline void get_serial_commands() {
       char* npos = (*command == 'N') ? command : NULL; // Require the N parameter to start the line
       char* apos = strchr(command, '*');
 
+      #if ENABLED( WIFI_PRINT )
+        if ( strncmp( command, "REDY:", 4 ) == 0 ) {
+          // Do stuff with that ?
+          lcd_setstatus( command + 5 );
+          continue;
+        }
+      #endif // END WIFI_PRINT
+
       if (npos) {
 
         boolean M110 = strstr_P(command, PSTR("M110")) != NULL;
@@ -973,6 +1117,11 @@ inline void get_serial_commands() {
 
         if (gcode_N != gcode_LastN + 1 && !M110) {
           gcode_line_error(PSTR(MSG_ERR_LINE_NO));
+
+          #if ENABLED( WIFI_PRINT )
+            SECOND_SERIAL.println( 'K' );
+          #endif
+
           return;
         }
 
@@ -982,12 +1131,22 @@ inline void get_serial_commands() {
 
           if (strtol(apos + 1, NULL, 10) != checksum) {
             gcode_line_error(PSTR(MSG_ERR_CHECKSUM_MISMATCH));
+
+            #if ENABLED( WIFI_PRINT )
+              SECOND_SERIAL.println( 'K' );
+            #endif
+
             return;
           }
           // if no errors, continue parsing
         }
         else {
           gcode_line_error(PSTR(MSG_ERR_NO_CHECKSUM));
+
+          #if ENABLED( WIFI_PRINT )
+            SECOND_SERIAL.println( 'K' );
+          #endif
+
           return;
         }
 
@@ -996,6 +1155,11 @@ inline void get_serial_commands() {
       }
       else if (apos) { // No '*' without 'N'
         gcode_line_error(PSTR(MSG_ERR_NO_LINENUMBER_WITH_CHECKSUM), false);
+
+        #if ENABLED( WIFI_PRINT )
+          SECOND_SERIAL.println( 'K' );
+        #endif
+
         return;
       }
 
@@ -1025,15 +1189,30 @@ inline void get_serial_commands() {
 
       // Add the command to the queue
       _enqueuecommand(serial_line_buffer, true);
+
+      #if ENABLED( WIFI_PRINT )
+        SECOND_SERIAL.println( 'O' );
+      #endif
     }
     else if (serial_count >= MAX_CMD_SIZE - 1) {
       // Keep fetching, but ignore normal characters beyond the max length
       // The command will be injected when EOL is reached
     }
     else if (serial_char == '\\') {  // Handle escapes
+      #if ENABLED(WIFI_PRINT)
+      if (MYSERIAL.available() > 0 || SECOND_SERIAL.available() > 0) {
+        // if we have one more character, copy it over
+        if (SECOND_SERIAL.available() > 0) {
+          serial_char = SECOND_SERIAL.read();
+        }
+        else {
+          serial_char = MYSERIAL.read();
+        }
+      #else
       if (MYSERIAL.available() > 0) {
         // if we have one more character, copy it over
         serial_char = MYSERIAL.read();
+      #endif
         if (!serial_comment_mode) serial_line_buffer[serial_count++] = serial_char;
       }
       // otherwise do nothing
@@ -1071,8 +1250,24 @@ inline void get_serial_commands() {
       card_eof = card.eof();
       if (card_eof || n == -1
           || sd_char == '\n' || sd_char == '\r'
-          || ((sd_char == '#' || sd_char == ':') && !sd_comment_mode)
+          || ((sd_char == '#'
+             #if DISABLED(WIFI_PRINT)
+             || sd_char == ':'
+             #endif
+             ) && !sd_comment_mode)
+
       ) {
+        if (sd_char == '#') stop_buffering = true;
+
+        sd_comment_mode = false; //for new command
+
+        if (sd_count) {
+          command_queue[cmd_queue_index_w][sd_count] = '\0'; //terminate string
+          sd_count = 0; //clear buffer
+
+          _commit_command(false);
+        }
+
         if (card_eof) {
           SERIAL_PROTOCOLLNPGM(MSG_FILE_PRINTED);
           print_job_timer.stop();
@@ -1086,16 +1281,8 @@ inline void get_serial_commands() {
           card.printingHasFinished();
           card.checkautostart(true);
         }
-        if (sd_char == '#') stop_buffering = true;
-
-        sd_comment_mode = false; //for new command
 
         if (!sd_count) continue; //skip empty lines
-
-        command_queue[cmd_queue_index_w][sd_count] = '\0'; //terminate string
-        sd_count = 0; //clear buffer
-
-        _commit_command(false);
       }
       else if (sd_count >= MAX_CMD_SIZE - 1) {
         /**
@@ -1553,7 +1740,7 @@ static void setup_for_endstop_move() {
 
       // move down slowly until you find the bed
       feedrate = homing_feedrate[Z_AXIS] / 4;
-      destination[Z_AXIS] = -10;
+      destination[Z_AXIS] = -20;
       prepare_move_raw(); // this will also set_current_to_destination
       st_synchronize();
       endstops_hit_on_purpose(); // clear endstop hit flags
@@ -3073,6 +3260,102 @@ inline void gcode_G28() {
     SERIAL_PROTOCOLLNPGM(" position out of range.");
   }
 
+   #if ENABLED(SUPERSEDE_DELTA_G29)
+
+    // Predefine used functions
+    inline void gcode_M500();
+    inline void gcode_M665();
+    inline void gcode_G30();
+
+    inline void gcode_G29() {
+      // enqueue_and_echo_commands_P( PSTR("M117 Calibration (0/3)") );
+      endstop_adj[0] = 0.0;
+      endstop_adj[1] = 0.0;
+      endstop_adj[2] = 0.0;
+
+      delta_diagonal_rod_trim_tower_1 = 0.0;
+      delta_diagonal_rod_trim_tower_2 = 0.0;
+      delta_diagonal_rod_trim_tower_3 = 0.0;
+      // enqueue_and_echo_commands_P( PSTR("M665") );
+      gcode_M665();
+
+      // wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+      // enqueue_and_echo_commands_P( PSTR("M117 Calibration (1/3)") );
+      // enqueue_and_echo_commands_P( PSTR("G28") );
+      gcode_G28();
+
+      // enqueue_and_echo_commands_P( PSTR("G0 F8000 X-77.94 Y-45 Z10") );
+      destination[X_AXIS] = -77.94f;
+      destination[Y_AXIS] = -45.0f;
+      destination[Z_AXIS] = 10.0f;
+      feedrate = 8000;
+      prepare_move();
+      st_synchronize();
+
+      // enqueue_and_echo_commands_P( PSTR("G30") );
+      gcode_G30();
+
+      // wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+      float z_adjust_X = current_position[Z_AXIS];
+
+      // enqueue_and_echo_commands_P( PSTR("M117 Calibration (2/3)") );
+      // enqueue_and_echo_commands_P( PSTR("G0 F8000 X77.94 Y-45 Z10") );
+      destination[X_AXIS] = 77.94f;
+      destination[Y_AXIS] = -45.0f;
+      destination[Z_AXIS] = 10.0f;
+      feedrate = 8000;
+      prepare_move();
+      st_synchronize();
+
+      // enqueue_and_echo_commands_P( PSTR("G30") );
+      gcode_G30();
+
+      // wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+      float z_adjust_Y = current_position[Z_AXIS];
+
+      // enqueue_and_echo_commands_P( PSTR("M117 Calibration (3/3)") );
+      // enqueue_and_echo_commands_P( PSTR("G0 F8000 X0 Y90 Z10") );
+      destination[X_AXIS] = 0.0f;
+      destination[Y_AXIS] = 90.0f;
+      destination[Z_AXIS] = 10.0f;
+      feedrate = 8000;
+      prepare_move();
+      st_synchronize();
+
+      // enqueue_and_echo_commands_P( PSTR("G30") );
+      gcode_G30();
+
+      // wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+      float z_adjust_Z = current_position[Z_AXIS];
+
+      SERIAL_ECHO( "z_adjust: X:" );
+      SERIAL_ECHO( z_adjust_X );
+      SERIAL_ECHO( " Y:" );
+      SERIAL_ECHO( z_adjust_Y );
+      SERIAL_ECHO( " Z:" );
+      SERIAL_ECHOLN( z_adjust_Z );
+
+      endstop_adj[0] = z_adjust_X + zprobe_zoffset;
+      endstop_adj[1] = z_adjust_Y + zprobe_zoffset;
+      endstop_adj[2] = z_adjust_Z + zprobe_zoffset;
+
+      // enqueue_and_echo_commands_P( PSTR("M665") );
+      gcode_M665();
+
+      // enqueue_and_echo_commands_P( PSTR("G28") );
+      gcode_G28();
+
+      // enqueue_and_echo_commands_P( PSTR("M500") );
+      gcode_M500();
+
+      // enqueue_and_echo_commands_P( PSTR("M117 Calibration (done)") );
+      // wait_all_commands_finished__CALLABLE_FROM_LCD_ONLY();
+
+    }
+
+  #else // ELSE: SUPERSEDE_DELTA_G29
+
   /**
    * G29: Detailed Z probe, probes the bed at 3 or more points.
    *      Will fail if the printer has not been homed with G28.
@@ -3598,6 +3881,8 @@ inline void gcode_G28() {
     gcode_M114(); // Send end position to RepetierHost
 
   }
+
+  #endif //!SUPERSEDE_DELTA_G29
 
   #if DISABLED(Z_PROBE_SLED) // could be avoided
 
@@ -6002,18 +6287,21 @@ inline void gcode_M503() {
    *  X[position] - Move to this X position, with Y
    *  Y[position] - Move to this Y position, with X
    *  L[distance] - Retract distance for removal (manual reload)
+   *  P[pin]      - Pin to wait for, if not specified use lcd button
+   *              - Pin can be A, B or C respectively for X, Y and Z endstops.
+   *  S[0|1]      - If Pin, state to wait for, if not specified use LOW
    *
    *  Default values are used for omitted arguments.
    *
    */
   inline void gcode_M600() {
-
+    
     if (degHotend(active_extruder) < extrude_min_temp) {
       SERIAL_ERROR_START;
       SERIAL_ERRORLNPGM(MSG_TOO_COLD_FOR_M600);
       return;
     }
-
+    
     float lastpos[NUM_AXIS];
     #if ENABLED(DELTA)
       float fr60 = feedrate / 60;
@@ -6028,6 +6316,60 @@ inline void gcode_M503() {
     #else
       #define RUNPLAN line_to_destination();
     #endif
+
+    // DAGOMA added
+    int pin_number = -1;
+    int target = -1;
+    if (code_seen('P')) {
+      char nextChar = *(seen_pointer + 1);
+      if (nextChar == 'A') {
+        pin_number = X_MIN_PIN;
+      }
+      else if (nextChar == 'B') {
+        pin_number = Y_MAX_PIN;
+      }
+      else if (nextChar == 'C') {
+        pin_number = Z_MIN_PIN;
+      }
+      else {
+        pin_number = code_value();
+      }
+
+      int pin_state = code_seen('S') ? code_value() : -1; // required pin state - default is inverted
+
+      if (pin_state >= -1 && pin_state <= 1) {
+
+        // DAGOMA - byPass sensitive pin
+        /*
+        for (uint8_t i = 0; i < COUNT(sensitive_pins); i++) {
+          if (sensitive_pins[i] == pin_number) {
+            pin_number = -1;
+            break;
+          }
+        }
+        */
+        if (pin_number > -1) {
+          target = LOW;
+
+          //pinMode(pin_number, INPUT);
+
+          switch (pin_state) {
+            case 1:
+              target = HIGH;
+              break;
+
+            case 0:
+              target = LOW;
+              break;
+
+            case -1:
+              target = !digitalRead(pin_number);
+              break;
+          }
+        } // pin_number > -1
+      } // pin_state -1 0 1
+    } // code_seen('P')
+    // END DAGOMA added
 
     //retract by E
     if (code_seen('E')) destination[E_AXIS] += code_value();
@@ -6073,17 +6415,28 @@ inline void gcode_M503() {
     disable_e2();
     disable_e3();
     delay(100);
+    #if DISABLED(NO_LCD_FOR_FILAMENTCHANGEABLE)
     LCD_ALERTMESSAGEPGM(MSG_FILAMENTCHANGE);
+    #endif
     #if DISABLED(AUTO_FILAMENT_CHANGE)
       millis_t next_tick = 0;
     #endif
     KEEPALIVE_STATE(PAUSED_FOR_USER);
-    while (!lcd_clicked()) {
+    #if DISABLED(NO_LCD_FOR_FILAMENTCHANGEABLE)
+    while ( (pin_number != -1 && digitalRead(pin_number) != target) || !lcd_clicked() ) {
+    #else
+    while (pin_number != -1 && digitalRead(pin_number) != target) {
+    #endif
       #if DISABLED(AUTO_FILAMENT_CHANGE)
         millis_t ms = millis();
         if (ELAPSED(ms, next_tick)) {
+          #if DISABLED(NO_LCD_FOR_FILAMENTCHANGEABLE)
           lcd_quick_feedback();
+          #endif
           next_tick = ms + 2500UL; // feedback every 2.5s while waiting
+          enable_x();
+          enable_y();
+          enable_z();
         }
         idle(true);
       #else
@@ -6094,7 +6447,9 @@ inline void gcode_M503() {
       #endif
     } // while(!lcd_clicked)
     KEEPALIVE_STATE(IN_HANDLER);
+    #if DISABLED(NO_LCD_FOR_FILAMENTCHANGEABLE)
     lcd_quick_feedback(); // click sound feedback
+    #endif
 
     #if ENABLED(AUTO_FILAMENT_CHANGE)
       current_position[E_AXIS] = 0;
@@ -6112,7 +6467,9 @@ inline void gcode_M503() {
 
     RUNPLAN; //should do nothing
 
+    #if DISABLED(NO_LCD_FOR_FILAMENTCHANGEABLE)
     lcd_reset_alert_level();
+    #endif
 
     #if ENABLED(DELTA)
       // Move XYZ to starting position, then E
@@ -6130,8 +6487,14 @@ inline void gcode_M503() {
       line_to_destination();
     #endif
 
+    st_synchronize();
+
     #if ENABLED(FILAMENT_RUNOUT_SENSOR)
       filament_ran_out = false;
+    #endif
+
+    #if ENABLED(SUMMON_PRINT_PAUSE)
+      print_pause_summoned = false;
     #endif
 
   }
@@ -6183,6 +6546,47 @@ inline void gcode_M503() {
   }
 
 #endif // DUAL_X_CARRIAGE
+
+/*****************************************************************************
+ * DAGOMA.FR Specific
+ *****************************************************************************/
+#if ENABLED(WIFI_PRINT)
+inline void gcode_D700() {
+  SECOND_SERIAL.print("SSID:");
+  SECOND_SERIAL.println(current_command_args);
+}
+
+inline void gcode_D701() {
+  SECOND_SERIAL.print("PSWD:");
+  SECOND_SERIAL.println(current_command_args);
+}
+
+inline void gcode_D702() {
+  SECOND_SERIAL.println("REDY");
+}
+
+inline void gcode_D710() {
+  SECOND_SERIAL.print("PNAM:");
+  SECOND_SERIAL.println(current_command_args);
+}
+
+inline void gcode_D711() {
+  SECOND_SERIAL.print("APIU:");
+  SECOND_SERIAL.println(current_command_args);
+}
+
+inline void gcode_D712() {
+  SECOND_SERIAL.print("APIK:");
+  SECOND_SERIAL.println(current_command_args);
+}
+
+inline void gcode_D720() {
+  SERIAL_ECHO_START;
+  SERIAL_ECHOPGM("D:");
+  SERIAL_ECHOLN(current_command_args);
+}
+
+#endif
 
 /**
  * M907: Set digital trimpot motor current using axis codes X, Y, Z, E, B, S
@@ -7044,6 +7448,34 @@ void process_next_command() {
       gcode_T(codenum);
       break;
 
+    case 'D': switch (codenum) {
+      // DAGOMA.FR Specific
+      #if ENABLED(WIFI_PRINT)
+        case 700:
+          gcode_D700(); // SSID
+          break;
+        case 701:
+          gcode_D701(); // PSWD
+          break;
+        case 702:
+          gcode_D702(); // REDY? get ip
+          break;
+        case 710:
+          gcode_D710(); // Tech name
+          break;
+        case 711:
+          gcode_D711(); // API Url
+          break;
+        case 712:
+          gcode_D712(); // API Key
+          break;
+        case 720:
+          gcode_D720(); // ECHO
+          break;
+      #endif
+      // DAGOMA.FR End
+      }
+    break;
     default: code_is_good = false;
   }
 
@@ -7733,6 +8165,31 @@ void disable_all_steppers() {
   disable_e3();
 }
 
+
+#if ENABLED(SUMMON_PRINT_PAUSE)
+
+  void manage_pause_summoner() {
+    // PAUSE PUSHED
+    if (!print_pause_summoned
+      #if HAS_FILRUNOUT
+      && !filament_ran_out
+      #endif
+      ) {
+      if (
+        IS_SD_PRINTING
+        && READ(SUMMON_PRINT_PAUSE_PIN)
+        && axis_homed[X_AXIS]
+        && axis_homed[Y_AXIS]
+        && axis_homed[Z_AXIS]
+        ) {
+          print_pause_summoned = true;
+          enqueue_and_echo_commands_P(PSTR(SUMMON_PRINT_PAUSE_SCRIPT));
+      }
+    }
+  }
+
+#endif // SUMMON_PRINT_PAUSE
+
 /**
  * Standard idle routine keeps the machine alive
  */
@@ -7742,13 +8199,39 @@ void idle(
   #endif
 ) {
   manage_heater();
+  #if ENABLED(SUMMON_PRINT_PAUSE)
+  manage_pause_summoner();
+  #endif
   manage_inactivity(
     #if ENABLED(FILAMENTCHANGEENABLE)
       no_stepper_sleep
     #endif
   );
   host_keepalive();
-  lcd_update();
+  #if ENABLED(U8GLIB_SSD1306) && ENABLED(INTELLIGENT_LCD_REFRESH_RATE)
+    if (IS_SD_PRINTING && axis_homed[X_AXIS] && axis_homed[Y_AXIS] && axis_homed[Z_AXIS]) {
+      
+      if ( last_intelligent_F_lcd_update != feedrate ) {
+        last_intelligent_F_authorized_lcd_update = feedrate > last_intelligent_F_lcd_update;
+        last_intelligent_F_lcd_update = feedrate;
+      }
+
+      if ( last_intelligent_z_lcd_update != current_position[Z_AXIS] || last_intelligent_F_authorized_lcd_update ) {
+        last_intelligent_z_lcd_update = current_position[Z_AXIS];
+        lcd_update();
+      }
+
+    }
+    else {
+      lcd_update();
+    }
+  #else
+    lcd_update();
+  #endif
+
+  #if ENABLED( WIFI_PRINT )
+    manage_second_serial_status();
+  #endif
 }
 
 /**
@@ -7766,8 +8249,9 @@ void idle(
 void manage_inactivity(bool ignore_stepper_queue/*=false*/) {
 
   #if HAS_FILRUNOUT
-    if (IS_SD_PRINTING && !(READ(FILRUNOUT_PIN) ^ FIL_RUNOUT_INVERTING))
+    if (IS_SD_PRINTING && !(READ(FILRUNOUT_PIN) ^ FIL_RUNOUT_INVERTING)) {
       handle_filament_runout();
+    }
   #endif
 
   if (commands_in_queue < BUFSIZE) get_available_commands();
@@ -7834,6 +8318,38 @@ void manage_inactivity(bool ignore_stepper_queue/*=false*/) {
         homeDebounceCount++;
       else
         homeDebounceCount = 0;
+    }
+  #endif
+
+  #if ENABLED(IS_MONO_FAN) || ENABLED(PRINTER_HEAD_EASY)
+    if ( ELAPSED(ms, next_fan_auto_regulation_check) ) {
+      float max_temp = 0.0;
+      for (int8_t cur_extruder = 0; cur_extruder < EXTRUDERS; ++cur_extruder)
+        max_temp = max(max_temp, degHotend(cur_extruder));
+
+      #if ENABLED(IS_MONO_FAN)
+        short fs = 0;
+        if ( max_temp < MONO_FAN_MIN_TEMP ) {
+          fs = 0;
+        }
+        else {
+          fs = fanSpeeds[0];
+          NOLESS(fs, MONO_FAN_MIN_PWM);
+        }
+
+        fanSpeeds[0] = fs;
+      #endif
+
+      #if ENABLED(PRINTER_HEAD_EASY)
+        if ( max_temp < PRINTER_HEAD_EASY_CONSTANT_FAN_MIN_TEMP ) {
+          analogWrite(PRINTER_HEAD_EASY_CONSTANT_FAN_PIN, 0);
+        }
+        else {
+          analogWrite(PRINTER_HEAD_EASY_CONSTANT_FAN_PIN, 255);
+        }
+      #endif
+
+      next_fan_auto_regulation_check = ms + 2500UL;
     }
   #endif
 
