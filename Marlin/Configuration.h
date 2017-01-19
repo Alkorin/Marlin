@@ -810,6 +810,8 @@ const bool Z_MIN_PROBE_ENDSTOP_INVERTING = false; // set to true to invert the l
 //#define ULTRA_LCD   // Character based
 //#define DOGLCD      // Full graphics display
 
+#define SPI_METRICS
+
 //
 // SD CARD
 //

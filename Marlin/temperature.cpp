@@ -461,6 +461,9 @@ static void updateTemperaturesFromRawValues();
         return;
       }
       lcd_update();
+      #if ENABLED(METRICS)
+        metrics_update();
+      #endif
     }
   }
 

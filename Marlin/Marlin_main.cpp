@@ -33,6 +33,7 @@
  */
 
 #include "Marlin.h"
+#include "metrics.h"
 
 #if ENABLED(AUTO_BED_LEVELING_FEATURE)
   #include "vector_3.h"
@@ -861,6 +862,10 @@ void setup() {
   Config_RetrieveSettings();
 
   lcd_init();
+
+  #if ENABLED(SPI_METRICS)
+    metrics_init();
+  #endif
 
   tp_init();    // Initialize temperature loop
   plan_init();  // Initialize planner;
@@ -8227,6 +8232,10 @@ void idle(
     }
   #else
     lcd_update();
+  #endif
+
+  #if ENABLED(SPI_METRICS)
+    metrics_update();
   #endif
 
   #if ENABLED( WIFI_PRINT )
