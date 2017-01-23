@@ -1,4 +1,6 @@
 #include "metrics.h"
+
+#include "cardreader.h"
 #include "temperature.h"
 
 #define HAVE_BED_TEMPERATURE_SENSOR ((TEMP_SENSOR_BED == 0) ? 0 : 1)
@@ -52,6 +54,16 @@ void metrics_update() {
         spiSend(METRICS_OPCODE_TEMP_BED);
         spiSend((uint8_t)degBed());
         spiSend((uint8_t)degTargetBed());
+    #endif
+
+    // Write Status
+    #if ENABLED(SDSUPPORT)
+        spiSend(METRICS_OPCODE_SD_PRINTING);
+        spiSend(IS_SD_PRINTING);
+        if (IS_SD_PRINTING) {
+            spiSend(METRICS_OPCODE_SD_PROGRESS);
+            spiSend(card.percentDone());
+        }
     #endif
 
     csHigh();

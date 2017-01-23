@@ -34,6 +34,10 @@
 
 #define METRICS_OPCODE_TEMP_BED     0x17
 
+#define METRICS_OPCODE_SD_PRINTING  0x20
+#define METRICS_OPCODE_SD_PROGRESS  0x21
+
+
 
 void metrics_init();
 void metrics_update();
