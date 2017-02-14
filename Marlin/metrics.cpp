@@ -106,8 +106,8 @@ void metrics_update() {
         spiSend32(metrics_Duration);
         spiSend16(metrics_Layer);
         spiSend16(metrics_Layers);
-        spiSend16(millis() - metrics_LayerStart);
-        spiSend16(metrics_LayerDuration);
+        spiSend32(millis() - metrics_LayerStart);
+        spiSend32(metrics_LayerDuration);
     }
 
     csHigh();
