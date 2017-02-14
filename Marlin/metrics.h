@@ -34,12 +34,15 @@
 
 #define METRICS_OPCODE_TEMP_BED     0x17
 
-#define METRICS_OPCODE_SD_PRINTING  0x20
-#define METRICS_OPCODE_SD_PROGRESS  0x21
+#define METRICS_OPCODE_PRINT_PROGRESS 0x20
 
-
+#define METRICS_OPCODE_SD_PRINTING  0x28
+#define METRICS_OPCODE_SD_PROGRESS  0x29
 
 void metrics_init();
 void metrics_update();
+
+void metrics_startPrint(long layer, long duration);
+void metrics_startLayer(long layer, long duration);
 
 #endif

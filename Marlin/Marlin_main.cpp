@@ -6552,6 +6552,21 @@ inline void gcode_M503() {
 
 #endif // DUAL_X_CARRIAGE
 
+#if ENABLED(SPI_METRICS)
+  inline void gcode_M800() {
+      metrics_startPrint(
+        code_seen('L') ? code_value_long() : 0,
+        code_seen('S') ? code_value_long() : 0
+      );
+  }
+  inline void gcode_M801() {
+      metrics_startLayer(
+        code_seen('L') ? code_value_long() : 0,
+        code_seen('S') ? code_value_long() : 0
+      );
+  }
+#endif
+
 /*****************************************************************************
  * DAGOMA.FR Specific
  *****************************************************************************/
@@ -7406,6 +7421,15 @@ void process_next_command() {
           gcode_M605();
           break;
       #endif // DUAL_X_CARRIAGE
+
+      #if ENABLED(SPI_METRICS)
+        case 800:
+          gcode_M800();
+          break;
+        case 801:
+          gcode_M801();
+          break;
+      #endif
 
       case 907: // M907 Set digital trimpot motor current using axis codes.
         gcode_M907();
